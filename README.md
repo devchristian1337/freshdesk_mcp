@@ -183,7 +183,8 @@ npx -y @smithery/cli install @effytech/freshdesk_mcp --client claude
     ],
     "env": {
       "FRESHDESK_API_KEY": "<YOUR_FRESHDESK_API_KEY>",
-      "FRESHDESK_DOMAIN": "<YOUR_FRESHDESK_DOMAIN>"
+      "FRESHDESK_DOMAIN": "<YOUR_FRESHDESK_DOMAIN>",
+      "FRESHDESK_TICKETS_READ_ONLY": "false"
     }
   }
 }
@@ -192,6 +193,7 @@ npx -y @smithery/cli install @effytech/freshdesk_mcp --client claude
 **Important Notes**:
 - Replace `YOUR_FRESHDESK_API_KEY` with your actual Freshdesk API key
 - Replace `YOUR_FRESHDESK_DOMAIN` with your Freshdesk domain (e.g., `yourcompany.freshdesk.com`)
+- Set `FRESHDESK_TICKETS_READ_ONLY` to `true` to block all ticket write operations (create, update, delete, reply, note). Accepts `true`, `1`, or `yes`. Defaults to `false`
 
 ## Example Operations
 

@@ -16,6 +16,14 @@ mcp = FastMCP("freshdesk-mcp")
 
 FRESHDESK_API_KEY = os.getenv("FRESHDESK_API_KEY")
 FRESHDESK_DOMAIN = os.getenv("FRESHDESK_DOMAIN")
+FRESHDESK_TICKETS_READ_ONLY = os.getenv("FRESHDESK_TICKETS_READ_ONLY", "false").lower() in ("true", "1", "yes")
+
+
+def _check_tickets_read_only() -> Optional[Dict[str, Any]]:
+    """Return an error dict if ticket read-only mode is active, otherwise None."""
+    if FRESHDESK_TICKETS_READ_ONLY:
+        return {"error": "Operation blocked: FRESHDESK_TICKETS_READ_ONLY mode is active"}
+    return None
 
 
 def parse_link_header(link_header: str) -> Dict[str, Optional[int]]:
@@ -234,6 +242,8 @@ async def create_ticket(
     additional_fields: Optional[Dict[str, Any]] = None  # 👈 new parameter
 ) -> str:
     """Create a ticket in Freshdesk"""
+    if (ro := _check_tickets_read_only()):
+        return ro
     # Validate requester information
     if not email and not requester_id:
         return "Error: Either email or requester_id must be provided"
@@ -305,6 +315,8 @@ async def create_ticket(
 @mcp.tool()
 async def update_ticket(ticket_id: int, ticket_fields: Dict[str, Any]) -> Dict[str, Any]:
     """Update a ticket in Freshdesk."""
+    if (ro := _check_tickets_read_only()):
+        return ro
     if not ticket_fields:
         return {"error": "No fields provided for update"}
 
@@ -360,6 +372,8 @@ async def update_ticket(ticket_id: int, ticket_fields: Dict[str, Any]) -> Dict[s
 @mcp.tool()
 async def delete_ticket(ticket_id: int) -> str:
     """Delete a ticket in Freshdesk."""
+    if (ro := _check_tickets_read_only()):
+        return ro
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}"
     headers = {
         "Authorization": f"Basic {base64.b64encode(f'{FRESHDESK_API_KEY}:X'.encode()).decode()}"
@@ -406,6 +420,8 @@ async def get_ticket_conversation(ticket_id: int)-> list[Dict[str, Any]]:
 @mcp.tool()
 async def create_ticket_reply(ticket_id: int,body: str)-> Dict[str, Any]:
     """Create a reply to a ticket in Freshdesk."""
+    if (ro := _check_tickets_read_only()):
+        return ro
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/reply"
     headers = {
         "Authorization": f"Basic {base64.b64encode(f'{FRESHDESK_API_KEY}:X'.encode()).decode()}"
@@ -420,6 +436,8 @@ async def create_ticket_reply(ticket_id: int,body: str)-> Dict[str, Any]:
 @mcp.tool()
 async def create_ticket_note(ticket_id: int,body: str)-> Dict[str, Any]:
     """Create a note for a ticket in Freshdesk."""
+    if (ro := _check_tickets_read_only()):
+        return ro
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/notes"
     headers = {
         "Authorization": f"Basic {base64.b64encode(f'{FRESHDESK_API_KEY}:X'.encode()).decode()}"
@@ -434,6 +452,8 @@ async def create_ticket_note(ticket_id: int,body: str)-> Dict[str, Any]:
 @mcp.tool()
 async def update_ticket_conversation(conversation_id: int,body: str)-> Dict[str, Any]:
     """Update a conversation for a ticket in Freshdesk."""
+    if (ro := _check_tickets_read_only()):
+        return ro
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/conversations/{conversation_id}"
     headers = {
         "Authorization": f"Basic {base64.b64encode(f'{FRESHDESK_API_KEY}:X'.encode()).decode()}"
@@ -1202,6 +1222,8 @@ async def view_ticket_summary(ticket_id: int) -> Dict[str, Any]:
 @mcp.tool()
 async def update_ticket_summary(ticket_id: int, body: str) -> Dict[str, Any]:
     """Update the summary of a ticket in Freshdesk."""
+    if (ro := _check_tickets_read_only()):
+        return ro
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/summary"
     headers = {
         "Authorization": f"Basic {base64.b64encode(f'{FRESHDESK_API_KEY}:X'.encode()).decode()}",
@@ -1224,6 +1246,8 @@ async def update_ticket_summary(ticket_id: int, body: str) -> Dict[str, Any]:
 @mcp.tool()
 async def delete_ticket_summary(ticket_id: int) -> Dict[str, Any]:
     """Delete the summary of a ticket in Freshdesk."""
+    if (ro := _check_tickets_read_only()):
+        return ro
     url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets/{ticket_id}/summary"
     headers = {
         "Authorization": f"Basic {base64.b64encode(f'{FRESHDESK_API_KEY}:X'.encode()).decode()}",
