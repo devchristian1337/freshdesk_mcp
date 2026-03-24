@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -45,6 +46,15 @@ mcp = FastMCP(
     # otherwise returns 421 "Invalid Host header" and remote clients cannot connect.
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
+
+# MCP listTools annotations (hints for clients; Freshdesk is always external / "open world").
+_ANN_READ = ToolAnnotations(
+    readOnlyHint=True,
+    idempotentHint=True,
+    openWorldHint=True,
+)
+_ANN_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True)
+_ANN_DELETE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True)
 
 
 def _require_freshdesk_config(ctx: Context) -> FreshdeskConfig | Dict[str, Any]:
@@ -225,7 +235,7 @@ class CannedResponseCreate(BaseModel):
         description="Groups for which the canned response is visible. Required if visibility=2"
     )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def get_ticket_fields(ctx: Context) -> Dict[str, Any]:
     """Get ticket fields from Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -235,7 +245,7 @@ async def get_ticket_fields(ctx: Context) -> Dict[str, Any]:
     return await _fd_call(cfg, "GET", "/api/v2/ticket_fields")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def get_tickets(ctx: Context, page: Optional[int] = 1, per_page: Optional[int] = 30) -> Dict[str, Any]:
     """Get tickets from Freshdesk with pagination support."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -266,7 +276,7 @@ async def get_tickets(ctx: Context, page: Optional[int] = 1, per_page: Optional[
             },
         }
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def create_ticket(
     ctx: Context,
     subject: str,
@@ -336,7 +346,7 @@ async def create_ticket(
         return f"Error: Failed to create ticket - {out.get('error')}"
     return "Ticket created successfully" if isinstance(out, dict) and "id" in out else f"Success: {out}"
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_ticket(ticket_id: int, ticket_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Update a ticket in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -373,7 +383,7 @@ async def update_ticket(ticket_id: int, ticket_fields: Dict[str, Any], ctx: Cont
         return {"success": False, "error": out.get("error")}
     return {"success": True, "message": "Ticket updated successfully", "ticket": out}
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_DELETE)
 async def delete_ticket(ticket_id: int, ctx: Context) -> Dict[str, Any]:
     """Delete a ticket in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -388,7 +398,7 @@ async def delete_ticket(ticket_id: int, ctx: Context) -> Dict[str, Any]:
         return out
     return {"success": True, "message": "Ticket deleted successfully"}
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def get_ticket(ticket_id: int, ctx: Context):
     """Get a ticket in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -398,7 +408,7 @@ async def get_ticket(ticket_id: int, ctx: Context):
     return await _fd_call(cfg, "GET", f"/api/v2/tickets/{ticket_id}")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def search_tickets(query: str, ctx: Context) -> Dict[str, Any]:
     """Search for tickets in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -408,7 +418,7 @@ async def search_tickets(query: str, ctx: Context) -> Dict[str, Any]:
     return await _fd_call(cfg, "GET", "/api/v2/search/tickets", params={"query": query})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def get_ticket_conversation(ticket_id: int, ctx: Context) -> list[Dict[str, Any]]:
     """Get a ticket conversation in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -418,7 +428,7 @@ async def get_ticket_conversation(ticket_id: int, ctx: Context) -> list[Dict[str
     return await _fd_call(cfg, "GET", f"/api/v2/tickets/{ticket_id}/conversations")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def create_ticket_reply(ticket_id: int,body: str, ctx: Context) -> Dict[str, Any]:
     """Create a reply to a ticket in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -433,7 +443,7 @@ async def create_ticket_reply(ticket_id: int,body: str, ctx: Context) -> Dict[st
             client, cfg, "POST", f"/api/v2/tickets/{ticket_id}/reply", json=data
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def create_ticket_note(ticket_id: int,body: str, ctx: Context) -> Dict[str, Any]:
     """Create a note for a ticket in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -448,7 +458,7 @@ async def create_ticket_note(ticket_id: int,body: str, ctx: Context) -> Dict[str
             client, cfg, "POST", f"/api/v2/tickets/{ticket_id}/notes", json=data
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_ticket_conversation(conversation_id: int,body: str, ctx: Context) -> Dict[str, Any]:
     """Update a conversation for a ticket in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -466,7 +476,7 @@ async def update_ticket_conversation(conversation_id: int,body: str, ctx: Contex
         return out
     return out
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def get_agents(ctx: Context, page: Optional[int] = 1, per_page: Optional[int] = 30) -> list[Dict[str, Any]]:
     """Get all agents in Freshdesk with pagination support."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -482,7 +492,7 @@ async def get_agents(ctx: Context, page: Optional[int] = 1, per_page: Optional[i
     params = {"page": page, "per_page": per_page}
     return await _fd_call(cfg, "GET", "/api/v2/agents", params=params)
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def list_contacts(ctx: Context, page: Optional[int] = 1, per_page: Optional[int] = 30) -> list[Dict[str, Any]]:
     """List all contacts in Freshdesk with pagination support."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -492,7 +502,7 @@ async def list_contacts(ctx: Context, page: Optional[int] = 1, per_page: Optiona
     params = {"page": page, "per_page": per_page}
     return await _fd_call(cfg, "GET", "/api/v2/contacts", params=params)
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def get_contact(contact_id: int, ctx: Context) -> Dict[str, Any]:
     """Get a contact in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -502,7 +512,7 @@ async def get_contact(contact_id: int, ctx: Context) -> Dict[str, Any]:
     return await _fd_call(cfg, "GET", f"/api/v2/contacts/{contact_id}")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def search_contacts(query: str, ctx: Context) -> list[Dict[str, Any]]:
     """Search for contacts in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -511,7 +521,7 @@ async def search_contacts(query: str, ctx: Context) -> list[Dict[str, Any]]:
     cfg: FreshdeskConfig = cfg_r
     return await _fd_call(cfg, "GET", "/api/v2/contacts/autocomplete", params={"term": query})
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_contact(contact_id: int, contact_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Update a contact in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -525,7 +535,7 @@ async def update_contact(contact_id: int, contact_fields: Dict[str, Any], ctx: C
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def list_canned_responses(folder_id: int, ctx: Context) -> list[Dict[str, Any]]:
     """List all canned responses in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -537,7 +547,7 @@ async def list_canned_responses(folder_id: int, ctx: Context) -> list[Dict[str, 
         return out
     return out if isinstance(out, list) else []
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def list_canned_response_folders(ctx: Context) -> list[Dict[str, Any]]:
     """List all canned response folders in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -547,7 +557,7 @@ async def list_canned_response_folders(ctx: Context) -> list[Dict[str, Any]]:
     return await _fd_call(cfg, "GET", "/api/v2/canned_response_folders")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def view_canned_response(canned_response_id: int, ctx: Context) -> Dict[str, Any]:
     """View a canned response in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -557,7 +567,7 @@ async def view_canned_response(canned_response_id: int, ctx: Context) -> Dict[st
     return await _fd_call(cfg, "GET", f"/api/v2/canned_responses/{canned_response_id}")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def create_canned_response(canned_response_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Create a canned response in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -577,7 +587,7 @@ async def create_canned_response(canned_response_fields: Dict[str, Any], ctx: Co
             client, cfg, "POST", "/api/v2/canned_responses", json=canned_response_data
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_canned_response(canned_response_id: int, canned_response_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Update a canned response in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -594,7 +604,7 @@ async def update_canned_response(canned_response_id: int, canned_response_fields
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def create_canned_response_folder(name: str, ctx: Context) -> Dict[str, Any]:
     """Create a canned response folder in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -606,7 +616,7 @@ async def create_canned_response_folder(name: str, ctx: Context) -> Dict[str, An
         return await freshdesk_call(client, cfg, "POST", "/api/v2/canned_response_folders", json=data)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_canned_response_folder(folder_id: int, name: str, ctx: Context) -> Dict[str, Any]:
     """Update a canned response folder in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -619,7 +629,7 @@ async def update_canned_response_folder(folder_id: int, name: str, ctx: Context)
             client, cfg, "PUT", f"/api/v2/canned_response_folders/{folder_id}", json=data
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def list_solution_articles(folder_id: int, ctx: Context) -> list[Dict[str, Any]]:
     """List all solution articles in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -631,7 +641,7 @@ async def list_solution_articles(folder_id: int, ctx: Context) -> list[Dict[str,
         return out
     return out if isinstance(out, list) else []
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def list_solution_folders(category_id: int, ctx: Context) -> list[Dict[str, Any]]:
     """List all solution folders in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -643,7 +653,7 @@ async def list_solution_folders(category_id: int, ctx: Context) -> list[Dict[str
     return await _fd_call(cfg, "GET", f"/api/v2/solutions/categories/{category_id}/folders")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def list_solution_categories(ctx: Context) -> list[Dict[str, Any]]:
     """List all solution categories in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -653,7 +663,7 @@ async def list_solution_categories(ctx: Context) -> list[Dict[str, Any]]:
     return await _fd_call(cfg, "GET", "/api/v2/solutions/categories")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def view_solution_category(category_id: int, ctx: Context) -> Dict[str, Any]:
     """View a solution category in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -663,7 +673,7 @@ async def view_solution_category(category_id: int, ctx: Context) -> Dict[str, An
     return await _fd_call(cfg, "GET", f"/api/v2/solutions/categories/{category_id}")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def create_solution_category(category_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Create a solution category in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -678,7 +688,7 @@ async def create_solution_category(category_fields: Dict[str, Any], ctx: Context
             client, cfg, "POST", "/api/v2/solutions/categories", json=category_fields
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_solution_category(category_id: int, category_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Update a solution category in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -697,7 +707,7 @@ async def update_solution_category(category_id: int, category_fields: Dict[str, 
             json=category_fields,
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def create_solution_category_folder(category_id: int, folder_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Create a solution category folder in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -715,7 +725,7 @@ async def create_solution_category_folder(category_id: int, folder_fields: Dict[
             json=folder_fields,
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def view_solution_category_folder(folder_id: int, ctx: Context) -> Dict[str, Any]:
     """View a solution category folder in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -725,7 +735,7 @@ async def view_solution_category_folder(folder_id: int, ctx: Context) -> Dict[st
     return await _fd_call(cfg, "GET", f"/api/v2/solutions/folders/{folder_id}")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_solution_category_folder(folder_id: int, folder_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Update a solution category folder in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -740,7 +750,7 @@ async def update_solution_category_folder(folder_id: int, folder_fields: Dict[st
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def create_solution_article(folder_id: int, article_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Create a solution article in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -758,7 +768,7 @@ async def create_solution_article(folder_id: int, article_fields: Dict[str, Any]
             json=article_fields,
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def view_solution_article(article_id: int, ctx: Context) -> Dict[str, Any]:
     """View a solution article in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -768,7 +778,7 @@ async def view_solution_article(article_id: int, ctx: Context) -> Dict[str, Any]
     return await _fd_call(cfg, "GET", f"/api/v2/solutions/articles/{article_id}")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_solution_article(article_id: int, article_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Update a solution article in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -780,7 +790,7 @@ async def update_solution_article(article_id: int, article_fields: Dict[str, Any
             client, cfg, "PUT", f"/api/v2/solutions/articles/{article_id}", json=article_fields
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def view_agent(agent_id: int, ctx: Context) -> Dict[str, Any]:
     """View an agent in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -790,7 +800,7 @@ async def view_agent(agent_id: int, ctx: Context) -> Dict[str, Any]:
     return await _fd_call(cfg, "GET", f"/api/v2/agents/{agent_id}")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def create_agent(agent_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Create an agent in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -813,7 +823,7 @@ async def create_agent(agent_fields: Dict[str, Any], ctx: Context) -> Dict[str, 
         return out
     return out
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_agent(agent_id: int, agent_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Update an agent in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -825,7 +835,7 @@ async def update_agent(agent_id: int, agent_fields: Dict[str, Any], ctx: Context
             client, cfg, "PUT", f"/api/v2/agents/{agent_id}", json=agent_fields
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def search_agents(query: str, ctx: Context) -> list[Dict[str, Any]]:
     """Search for agents in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -835,7 +845,7 @@ async def search_agents(query: str, ctx: Context) -> list[Dict[str, Any]]:
     return await _fd_call(cfg, "GET", "/api/v2/agents/autocomplete", params={"term": query})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def list_groups(ctx: Context, page: Optional[int] = 1, per_page: Optional[int] = 30) -> list[Dict[str, Any]]:
     """List all groups in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -845,7 +855,7 @@ async def list_groups(ctx: Context, page: Optional[int] = 1, per_page: Optional[
     params = {"page": page, "per_page": per_page}
     return await _fd_call(cfg, "GET", "/api/v2/groups", params=params)
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def create_group(group_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Create a group in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -866,7 +876,7 @@ async def create_group(group_fields: Dict[str, Any], ctx: Context) -> Dict[str, 
         return out
     return out
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def view_group(group_id: int, ctx: Context) -> Dict[str, Any]:
     """View a group in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -876,7 +886,7 @@ async def view_group(group_id: int, ctx: Context) -> Dict[str, Any]:
     return await _fd_call(cfg, "GET", f"/api/v2/groups/{group_id}")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def create_ticket_field(ticket_field_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Create a ticket field in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -889,7 +899,7 @@ async def create_ticket_field(ticket_field_fields: Dict[str, Any], ctx: Context)
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def view_ticket_field(ticket_field_id: int, ctx: Context) -> Dict[str, Any]:
     """View a ticket field in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -899,7 +909,7 @@ async def view_ticket_field(ticket_field_id: int, ctx: Context) -> Dict[str, Any
     return await _fd_call(cfg, "GET", f"/api/v2/admin/ticket_fields/{ticket_field_id}")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_ticket_field(ticket_field_id: int, ticket_field_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Update a ticket field in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -915,7 +925,7 @@ async def update_ticket_field(ticket_field_id: int, ticket_field_fields: Dict[st
             json=ticket_field_fields,
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_group(group_id: int, group_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Update a group in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -936,7 +946,7 @@ async def update_group(group_id: int, group_fields: Dict[str, Any], ctx: Context
         return out
     return out
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def list_contact_fields(ctx: Context) -> list[Dict[str, Any]]:
     """List all contact fields in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -946,7 +956,7 @@ async def list_contact_fields(ctx: Context) -> list[Dict[str, Any]]:
     return await _fd_call(cfg, "GET", "/api/v2/contact_fields")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def view_contact_field(contact_field_id: int, ctx: Context) -> Dict[str, Any]:
     """View a contact field in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -956,7 +966,7 @@ async def view_contact_field(contact_field_id: int, ctx: Context) -> Dict[str, A
     return await _fd_call(cfg, "GET", f"/api/v2/contact_fields/{contact_field_id}")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def create_contact_field(contact_field_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Create a contact field in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -975,7 +985,7 @@ async def create_contact_field(contact_field_fields: Dict[str, Any], ctx: Contex
             client, cfg, "POST", "/api/v2/contact_fields", json=contact_field_data
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_contact_field(contact_field_id: int, contact_field_fields: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     """Update a contact field in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -992,7 +1002,7 @@ async def update_contact_field(contact_field_id: int, contact_field_fields: Dict
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def get_field_properties(field_name: str, ctx: Context):
     """Get properties of a specific field by name."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -1060,7 +1070,7 @@ Notes:
 - Ensure the tone and style **match the prior replies**, and that the message provides **full context** so the recipient can understand the issue without needing to re-read earlier messages.
 """
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def list_companies(ctx: Context, page: Optional[int] = 1, per_page: Optional[int] = 30) -> Dict[str, Any]:
     """List all companies in Freshdesk with pagination support."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -1093,7 +1103,7 @@ async def list_companies(ctx: Context, page: Optional[int] = 1, per_page: Option
             },
         }
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def view_company(company_id: int, ctx: Context) -> Dict[str, Any]:
     """Get a company in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -1102,7 +1112,7 @@ async def view_company(company_id: int, ctx: Context) -> Dict[str, Any]:
     cfg: FreshdeskConfig = cfg_r
     return await _fd_call(cfg, "GET", f"/api/v2/companies/{company_id}")
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def search_companies(query: str, ctx: Context) -> Dict[str, Any]:
     """Search for companies in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -1113,7 +1123,7 @@ async def search_companies(query: str, ctx: Context) -> Dict[str, Any]:
         cfg, "GET", "/api/v2/companies/autocomplete", params={"name": query}
     )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def find_company_by_name(name: str, ctx: Context) -> Dict[str, Any]:
     """Find a company by name in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -1124,7 +1134,7 @@ async def find_company_by_name(name: str, ctx: Context) -> Dict[str, Any]:
         cfg, "GET", "/api/v2/companies/autocomplete", params={"name": name}
     )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def list_company_fields(ctx: Context) -> List[Dict[str, Any]]:
     """List all company fields in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -1133,7 +1143,7 @@ async def list_company_fields(ctx: Context) -> List[Dict[str, Any]]:
     cfg: FreshdeskConfig = cfg_r
     return await _fd_call(cfg, "GET", "/api/v2/company_fields")
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_READ)
 async def view_ticket_summary(ticket_id: int, ctx: Context) -> Dict[str, Any]:
     """Get the summary of a ticket in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -1142,7 +1152,7 @@ async def view_ticket_summary(ticket_id: int, ctx: Context) -> Dict[str, Any]:
     cfg: FreshdeskConfig = cfg_r
     return await _fd_call(cfg, "GET", f"/api/v2/tickets/{ticket_id}/summary")
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_WRITE)
 async def update_ticket_summary(ticket_id: int, body: str, ctx: Context) -> Dict[str, Any]:
     """Update the summary of a ticket in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -1157,7 +1167,7 @@ async def update_ticket_summary(ticket_id: int, body: str, ctx: Context) -> Dict
             client, cfg, "PUT", f"/api/v2/tickets/{ticket_id}/summary", json=data
         )
 
-@mcp.tool()
+@mcp.tool(annotations=_ANN_DELETE)
 async def delete_ticket_summary(ticket_id: int, ctx: Context) -> Dict[str, Any]:
     """Delete the summary of a ticket in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
