@@ -6,6 +6,7 @@ from enum import Enum, IntEnum
 from typing import Any, Dict, List, Optional, Union
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -40,6 +41,9 @@ mcp = FastMCP(
     port=8000,
     streamable_http_path="/mcp",
     stateless_http=_bool_env("FASTMCP_STATELESS_HTTP", False),
+    # Railway / public HTTPS use arbitrary Host headers; SDK DNS rebinding check
+    # otherwise returns 421 "Invalid Host header" and remote clients cannot connect.
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
 
