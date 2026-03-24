@@ -7,10 +7,11 @@ An MCP server implementation that integrates with Freshdesk, enabling AI models 
 
 ## Features
 
-- **Freshdesk Integration**: Seamless interaction with Freshdesk API endpoints
-- **AI Model Support**: Enables AI models to perform support operations through Freshdesk
-- **Automated Ticket Management**: Handle ticket creation, updates, and responses
+- **59 Tools** covering tickets, agents, contacts, companies, groups, canned responses, solution articles, and field management
+- **MCP ToolAnnotations** on every tool (read-only, destructive, idempotent hints) for safe AI-driven automation
+- **2 Prompts** (`create_ticket`, `create_reply`) to guide AI models through Freshdesk payloads
 - **Multi-tenant HTTP**: One Railway deploy can serve many Freshdesk accounts when credentials are passed per connection (query string); optional env-based config for local stdio
+- **Read-only mode**: Block all ticket write operations via `FRESHDESK_TICKETS_READ_ONLY`
 
 ## Transport: local stdio vs remote HTTP
 
@@ -63,138 +64,115 @@ Putting the API key in the query string is **convenient** for clients that only 
 
 ### Tools
 
-The server offers several tools for Freshdesk operations:
+The server provides **59 tools** across 10 Freshdesk modules. All tools include [MCP ToolAnnotations](https://modelcontextprotocol.io/specification/2025-03-26/server/tools#annotations) (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so that AI clients can reason about safety before execution.
 
-- `create_ticket`: Create new support tickets
-  - **Inputs**:
-    - `subject` (string, required): Ticket subject
-    - `description` (string, required): Ticket description
-    - `source` (number, required): Ticket source code
-    - `priority` (number, required): Ticket priority level
-    - `status` (number, required): Ticket status code
-    - `email` (string, optional): Email of the requester
-    - `requester_id` (number, optional): ID of the requester
-    - `custom_fields` (object, optional): Custom fields to set on the ticket
-    - `additional_fields` (object, optional): Additional top-level fields
+#### Tickets (17 tools)
 
-- `update_ticket`: Update existing tickets
-  - **Inputs**:
-    - `ticket_id` (number, required): ID of the ticket to update
-    - `ticket_fields` (object, required): Fields to update
+| Tool | Type | Description |
+|------|------|-------------|
+| `get_tickets` | read | List tickets (paginated) |
+| `get_ticket` | read | Get a single ticket by ID |
+| `search_tickets` | read | Search tickets by query string |
+| `create_ticket` | write | Create a new ticket (subject, description, priority, status, source, email/requester_id, custom_fields, additional_fields) |
+| `update_ticket` | write | Update ticket fields |
+| `delete_ticket` | destructive | Delete a ticket |
+| `get_ticket_conversation` | read | Get all conversations for a ticket |
+| `create_ticket_reply` | write | Reply to a ticket |
+| `create_ticket_note` | write | Add a private note to a ticket |
+| `update_ticket_conversation` | write | Update a conversation entry |
+| `view_ticket_summary` | read | Get ticket summary |
+| `update_ticket_summary` | write | Update ticket summary |
+| `delete_ticket_summary` | destructive | Delete ticket summary |
+| `get_ticket_fields` | read | List all ticket fields |
+| `create_ticket_field` | write | Create a custom ticket field |
+| `view_ticket_field` | read | Get a single ticket field |
+| `update_ticket_field` | write | Update a ticket field |
 
-- `delete_ticket`: Delete a ticket
-  - **Inputs**:
-    - `ticket_id` (number, required): ID of the ticket to delete
+#### Agents (5 tools)
 
-- `search_tickets`: Search for tickets based on criteria
-  - **Inputs**:
-    - `query` (string, required): Search query string
+| Tool | Type | Description |
+|------|------|-------------|
+| `get_agents` | read | List agents (paginated) |
+| `view_agent` | read | Get a single agent by ID |
+| `create_agent` | write | Create a new agent |
+| `update_agent` | write | Update agent fields |
+| `search_agents` | read | Search agents by query |
 
-- `get_ticket_fields`: Get all ticket fields
-  - **Inputs**:
-    - None
+#### Contacts (5 tools)
 
-- `get_tickets`: Get all tickets
-  - **Inputs**:
-    - `page` (number, optional): Page number to fetch
-    - `per_page` (number, optional): Number of tickets per page
+| Tool | Type | Description |
+|------|------|-------------|
+| `list_contacts` | read | List contacts (paginated) |
+| `get_contact` | read | Get a single contact by ID |
+| `search_contacts` | read | Search contacts by query |
+| `update_contact` | write | Update contact fields |
+| `get_field_properties` | read | Get properties of a specific field by name (inspects ticket, contact and company fields) |
 
-- `get_ticket`: Get a single ticket
-  - **Inputs**:
-    - `ticket_id` (number, required): ID of the ticket to get
+#### Contact Fields (4 tools)
 
-- `get_ticket_conversation`: Get conversation for a ticket
-  - **Inputs**:
-    - `ticket_id` (number, required): ID of the ticket
+| Tool | Type | Description |
+|------|------|-------------|
+| `list_contact_fields` | read | List all contact fields |
+| `view_contact_field` | read | Get a single contact field |
+| `create_contact_field` | write | Create a custom contact field |
+| `update_contact_field` | write | Update a contact field |
 
-- `create_ticket_reply`: Reply to a ticket
-  - **Inputs**:
-    - `ticket_id` (number, required): ID of the ticket
-    - `body` (string, required): Content of the reply
+#### Companies (5 tools)
 
-- `create_ticket_note`: Add a note to a ticket
-  - **Inputs**:
-    - `ticket_id` (number, required): ID of the ticket
-    - `body` (string, required): Content of the note
+| Tool | Type | Description |
+|------|------|-------------|
+| `list_companies` | read | List companies (paginated) |
+| `view_company` | read | Get a single company by ID |
+| `search_companies` | read | Search companies by query |
+| `find_company_by_name` | read | Find a company by exact name |
+| `list_company_fields` | read | List all company fields |
 
-- `update_ticket_conversation`: Update a conversation
-  - **Inputs**:
-    - `conversation_id` (number, required): ID of the conversation
-    - `body` (string, required): Updated content
+#### Groups (4 tools)
 
-- `view_ticket_summary`: Get the summary of a ticket
-  - **Inputs**:
-    - `ticket_id` (number, required): ID of the ticket
+| Tool | Type | Description |
+|------|------|-------------|
+| `list_groups` | read | List groups (paginated) |
+| `view_group` | read | Get a single group by ID |
+| `create_group` | write | Create a new group |
+| `update_group` | write | Update group fields |
 
-- `update_ticket_summary`: Update the summary of a ticket
-  - **Inputs**:
-    - `ticket_id` (number, required): ID of the ticket
-    - `body` (string, required): New summary content
+#### Canned Responses (7 tools)
 
-- `delete_ticket_summary`: Delete the summary of a ticket
-  - **Inputs**:
-    - `ticket_id` (number, required): ID of the ticket
+| Tool | Type | Description |
+|------|------|-------------|
+| `list_canned_response_folders` | read | List all canned response folders |
+| `list_canned_responses` | read | List canned responses in a folder |
+| `view_canned_response` | read | Get a single canned response |
+| `create_canned_response` | write | Create a canned response |
+| `update_canned_response` | write | Update a canned response |
+| `create_canned_response_folder` | write | Create a canned response folder |
+| `update_canned_response_folder` | write | Update a canned response folder |
 
-- `get_agents`: Get all agents
-  - **Inputs**:
-    - `page` (number, optional): Page number
-    - `per_page` (number, optional): Number of agents per page
+#### Solutions / Knowledge Base (12 tools)
 
-- `view_agent`: Get a single agent
-  - **Inputs**:
-    - `agent_id` (number, required): ID of the agent
+| Tool | Type | Description |
+|------|------|-------------|
+| `list_solution_categories` | read | List all solution categories |
+| `view_solution_category` | read | Get a single solution category |
+| `create_solution_category` | write | Create a solution category |
+| `update_solution_category` | write | Update a solution category |
+| `list_solution_folders` | read | List folders in a category |
+| `view_solution_category_folder` | read | Get a single solution folder |
+| `create_solution_category_folder` | write | Create a folder in a category |
+| `update_solution_category_folder` | write | Update a solution folder |
+| `list_solution_articles` | read | List articles in a folder |
+| `view_solution_article` | read | Get a single solution article |
+| `create_solution_article` | write | Create a solution article |
+| `update_solution_article` | write | Update a solution article |
 
-- `create_agent`: Create a new agent
-  - **Inputs**:
-    - `agent_fields` (object, required): Agent details
+### Prompts
 
-- `update_agent`: Update an agent
-  - **Inputs**:
-    - `agent_id` (number, required): ID of the agent
-    - `agent_fields` (object, required): Fields to update
+The server also exposes two MCP prompts to help AI models compose Freshdesk payloads:
 
-- `search_agents`: Search for agents
-  - **Inputs**:
-    - `query` (string, required): Search query
-
-- `list_contacts`: Get all contacts
-  - **Inputs**:
-    - `page` (number, optional): Page number
-    - `per_page` (number, optional): Contacts per page
-
-- `get_contact`: Get a single contact
-  - **Inputs**:
-    - `contact_id` (number, required): ID of the contact
-
-- `search_contacts`: Search for contacts
-  - **Inputs**:
-    - `query` (string, required): Search query
-
-- `update_contact`: Update a contact
-  - **Inputs**:
-    - `contact_id` (number, required): ID of the contact
-    - `contact_fields` (object, required): Fields to update
-
-- `list_companies`: Get all companies
-  - **Inputs**:
-    - `page` (number, optional): Page number
-    - `per_page` (number, optional): Companies per page
-
-- `view_company`: Get a single company
-  - **Inputs**:
-    - `company_id` (number, required): ID of the company
-
-- `search_companies`: Search for companies
-  - **Inputs**:
-    - `query` (string, required): Search query
-
-- `find_company_by_name`: Find a company by name
-  - **Inputs**:
-    - `name` (string, required): Company name
-
-- `list_company_fields`: Get all company fields
-  - **Inputs**:
-    - None
+| Prompt | Purpose |
+|--------|---------|
+| `create_ticket` | Provides a payload template and field reference for ticket creation |
+| `create_reply` | Provides HTML formatting guidelines and context for ticket replies |
 
 ## Getting Started
 
@@ -264,6 +242,10 @@ Once configured, you can ask Claude to perform operations like:
 - "Update the status of ticket #12345 to 'Resolved'"
 - "List all high-priority tickets assigned to the agent John Doe"
 - "List previous tickets of customer A101 in last 30 days"
+- "Show me all canned response folders and list the responses in the Sales folder"
+- "Create a new knowledge base article about password reset in the FAQ category"
+- "List all groups and show me the members of the Support group"
+- "What custom fields are available on tickets?"
 
 
 ## Testing
@@ -276,12 +258,14 @@ pytest -q
 Local HTTP smoke test:
 
 ```bash
-set FRESHDESK_API_KEY=...
-set FRESHDESK_DOMAIN=yourcompany.freshdesk.com
-set MCP_TRANSPORT=http
-set PORT=8000
+export FRESHDESK_API_KEY=...
+export FRESHDESK_DOMAIN=yourcompany.freshdesk.com
+export MCP_TRANSPORT=http
+export PORT=8000
 freshdesk-mcp
 ```
+
+On Windows (CMD), replace `export` with `set`.
 
 Then open `http://127.0.0.1:8000/health` (or the printed port).
 
