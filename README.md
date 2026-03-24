@@ -10,6 +10,54 @@ An MCP server implementation that integrates with Freshdesk, enabling AI models 
 - **Freshdesk Integration**: Seamless interaction with Freshdesk API endpoints
 - **AI Model Support**: Enables AI models to perform support operations through Freshdesk
 - **Automated Ticket Management**: Handle ticket creation, updates, and responses
+- **Multi-tenant HTTP**: One Railway deploy can serve many Freshdesk accounts when credentials are passed per connection (query string); optional env-based config for local stdio
+
+## Transport: local stdio vs remote HTTP
+
+| Mode | When to use | How |
+|------|-------------|-----|
+| **stdio** (default) | Claude Desktop, local MCP clients | `MCP_TRANSPORT=stdio` or unset; set `FRESHDESK_*` env vars |
+| **Streamable HTTP** | [Claude.ai](https://claude.ai) remote MCP, Railway, any HTTP MCP client | `MCP_TRANSPORT=http` (alias for streamable HTTP), listen on `PORT`, MCP at `/mcp` |
+
+Public endpoints (HTTP mode):
+
+- `GET /health` — JSON `{"status":"healthy","service":"freshdesk-mcp"}` (use for Railway health checks)
+- `/mcp` — MCP streamable HTTP endpoint (per [FastMCP / MCP HTTP deployment](https://gofastmcp.com/deployment/http))
+
+Recommended for Railway: `FASTMCP_STATELESS_HTTP=true` (default in the provided `Dockerfile`) so each request is stateless and you do not rely on sticky sessions.
+
+## Remote MCP on Railway and Claude.ai
+
+1. Deploy this repo to Railway using the root `Dockerfile` (Python 3.11 slim, `CMD ["freshdesk-mcp"]`).
+2. Set **only** generic env on the service (do **not** put tenant Freshdesk secrets in Railway):
+
+   - `MCP_TRANSPORT=http`
+   - `FASTMCP_STATELESS_HTTP=true`
+   - Do **not** set `PORT` (Railway injects it).
+   - Do **not** set `FRESHDESK_DOMAIN` / `FRESHDESK_API_KEY` if you want per-user tenants via URL.
+
+3. Health check path in Railway: `/health`.
+4. In Claude.ai (or another remote MCP client), set the **connection URL** to:
+
+   ```text
+   https://<your-railway-host>/mcp?freshdesk_domain=<tenant>.freshdesk.com&freshdesk_api_key=<API_KEY>
+   ```
+
+   Use proper URL-encoding for the key and any special characters (e.g. `encodeURIComponent` in JavaScript).
+
+### Query string parameters (HTTP / multi-tenant)
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `freshdesk_domain` | Yes | Helpdesk host, e.g. `company.freshdesk.com`, or a full `https://company.freshdesk.com` URL (host is normalized) |
+| `freshdesk_api_key` | Yes | Freshdesk API key |
+| `freshdesk_tickets_read_only` | No | `true` / `1` / `yes` to block mutating ticket operations for that connection; defaults from env `FRESHDESK_TICKETS_READ_ONLY` when omitted |
+
+For **local stdio**, you can keep using `FRESHDESK_DOMAIN`, `FRESHDESK_API_KEY`, and `FRESHDESK_TICKETS_READ_ONLY` only; query params are not available without an HTTP request.
+
+### Security warning (API key in query string)
+
+Putting the API key in the query string is **convenient** for clients that only accept a single URL, but it is **weaker** than headers or a secret store: the key can appear in reverse-proxy access logs, browser or client history, and referrer metadata. This project implements it because it is a common requirement for remote MCP URLs; prefer env-based or header-based auth where your client supports it.
 
 ## Components
 
@@ -195,6 +243,19 @@ npx -y @smithery/cli install @effytech/freshdesk_mcp --client claude
 - Replace `YOUR_FRESHDESK_DOMAIN` with your Freshdesk domain (e.g., `yourcompany.freshdesk.com`)
 - Set `FRESHDESK_TICKETS_READ_ONLY` to `true` to block all ticket write operations (create, update, delete, reply, note). Accepts `true`, `1`, or `yes`. Defaults to `false`
 
+### Environment reference
+
+| Variable | Used in | Purpose |
+|----------|---------|---------|
+| `MCP_TRANSPORT` | Process | `stdio` (default) or `http` / `streamable-http` for HTTP |
+| `PORT` | HTTP | Listen port (Railway sets automatically) |
+| `MCP_HTTP_HOST` | HTTP | Bind address (default `0.0.0.0` when using HTTP in `main`) |
+| `FASTMCP_PORT` | HTTP | Fallback if `PORT` unset (default `8000`) |
+| `FASTMCP_STATELESS_HTTP` | HTTP | `true` recommended for Railway |
+| `FRESHDESK_DOMAIN` | stdio / fallback | Freshdesk host when query params are absent |
+| `FRESHDESK_API_KEY` | stdio / fallback | API key when query params are absent |
+| `FRESHDESK_TICKETS_READ_ONLY` | Both | Default read-only flag when not overridden in query |
+
 ## Example Operations
 
 Once configured, you can ask Claude to perform operations like:
@@ -207,18 +268,33 @@ Once configured, you can ask Claude to perform operations like:
 
 ## Testing
 
-For testing purposes, you can start the server manually:
+```bash
+pip install -e ".[dev]"
+pytest -q
+```
+
+Local HTTP smoke test:
 
 ```bash
-uvx freshdesk-mcp --env FRESHDESK_API_KEY=<your_api_key> --env FRESHDESK_DOMAIN=<your_domain>
+set FRESHDESK_API_KEY=...
+set FRESHDESK_DOMAIN=yourcompany.freshdesk.com
+set MCP_TRANSPORT=http
+set PORT=8000
+freshdesk-mcp
 ```
+
+Then open `http://127.0.0.1:8000/health` (or the printed port).
+
+Manual calls against a real account can be adapted in `scripts/manual_fd_mcp.py`.
 
 ## Troubleshooting
 
-- Verify your Freshdesk API key and domain are correct
-- Ensure proper network connectivity to Freshdesk servers
-- Check API rate limits and quotas
-- Verify the `uvx` command is available in your PATH
+- Verify your Freshdesk API key and domain are correct (for HTTP: check **URL-encoded** query params).
+- **404 on `/`** is normal; MCP lives at **`/mcp`**, health at **`/health`**.
+- If Railway reports unhealthy: confirm the process binds `0.0.0.0:$PORT` and `/health` returns 200.
+- If Claude.ai cannot connect: require HTTPS on the public URL and path `/mcp`.
+- Ensure proper network connectivity to Freshdesk servers and respect API rate limits.
+- For local installs, verify `uvx` / `freshdesk-mcp` is on your PATH if you use those launchers.
 
 ## License
 
