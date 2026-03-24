@@ -1268,8 +1268,34 @@ async def delete_ticket_summary(ticket_id: int) -> Dict[str, Any]:
             return {"error": f"An unexpected error occurred: {str(e)}"}
 
 def main():
-    logging.info("Starting Freshdesk MCP server")
-    mcp.run(transport='stdio')
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Freshdesk MCP Server")
+    parser.add_argument(
+        "--transport",
+        default="stdio",
+        choices=["stdio", "streamable-http", "sse"],
+        help="Transport type (default: stdio)",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host to bind to (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("PORT", "8000")),
+        help="Port to listen on (default: PORT env var or 8000)",
+    )
+    args = parser.parse_args()
+
+    logging.info(f"Starting Freshdesk MCP server (transport={args.transport})")
+
+    if args.transport == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        mcp.run(transport=args.transport, host=args.host, port=args.port)
 
 if __name__ == "__main__":
     main()
