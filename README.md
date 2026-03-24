@@ -195,59 +195,6 @@ npx -y @smithery/cli install @effytech/freshdesk_mcp --client claude
 - Replace `YOUR_FRESHDESK_DOMAIN` with your Freshdesk domain (e.g., `yourcompany.freshdesk.com`)
 - Set `FRESHDESK_TICKETS_READ_ONLY` to `true` to block all ticket write operations (create, update, delete, reply, note). Accepts `true`, `1`, or `yes`. Defaults to `false`
 
-## Deploy on Railway
-
-This project now supports automatic startup on Railway using MCP Streamable HTTP.
-
-### Runtime behavior
-
-- If `PORT` or Railway environment variables are present, the server starts in `streamable-http`
-- Otherwise it keeps the existing local behavior and starts in `stdio`
-
-### Required variables
-
-For Railway you only need the deployment/runtime variables:
-
-- `MCP_TRANSPORT` (optional): `auto`, `stdio`, `streamable-http`, or `sse`. Defaults to `auto`
-- `MCP_HOST` (optional): defaults to `0.0.0.0` for HTTP transports
-- `MCP_PORT` (optional): fallback port when `PORT` is not provided
-- `MCP_PATH` (optional): defaults to `/mcp`
-- `FRESHDESK_TICKETS_READ_ONLY` (optional): `true` to block ticket write operations
-
-### Claude connector URL
-
-You can now pass Freshdesk credentials in the connector URL instead of storing them in Railway:
-
-```text
-https://<your-railway-domain>/mcp?freshdeskDomain=yourcompany.freshdesk.com&freshdeskApiKey=<YOUR_FRESHDESK_API_KEY>
-```
-
-The server resolves credentials in this order:
-
-1. `freshdeskDomain` and `freshdeskApiKey` from the connector URL
-2. `FRESHDESK_DOMAIN` and `FRESHDESK_API_KEY` from environment variables as a local fallback
-
-### Healthcheck
-
-The service exposes:
-
-```text
-GET /healthz
-```
-
-### Security warning
-
-Passing `freshdeskApiKey` in the query string is supported for compatibility with the connector workflow you requested, but it is not recommended.
-
-Query-string secrets can be exposed through:
-
-- connector configuration history
-- browser history
-- infrastructure logs
-- reverse proxies and monitoring tools
-
-Prefer environment variables or a dedicated authentication flow whenever possible.
-
 ## Example Operations
 
 Once configured, you can ask Claude to perform operations like:
@@ -263,19 +210,7 @@ Once configured, you can ask Claude to perform operations like:
 For testing purposes, you can start the server manually:
 
 ```bash
-freshdesk-mcp
-```
-
-To test the Railway-compatible HTTP mode locally:
-
-```bash
-PORT=8080 MCP_TRANSPORT=streamable-http freshdesk-mcp
-```
-
-Then check:
-
-```text
-http://127.0.0.1:8080/healthz
+uvx freshdesk-mcp --env FRESHDESK_API_KEY=<your_api_key> --env FRESHDESK_DOMAIN=<your_domain>
 ```
 
 ## Troubleshooting

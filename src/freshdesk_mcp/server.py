@@ -1,251 +1,22 @@
 import httpx
-from mcp.server.fastmcp import FastMCP, Context
+from mcp.server.fastmcp import FastMCP
 import logging
 import os
 import base64
-import inspect
-from dataclasses import dataclass
-from functools import wraps
-from typing import Optional, Dict, Union, Any, List, Callable, Literal
+from typing import Optional, Dict, Union, Any, List
 from enum import IntEnum, Enum
 import re
 from pydantic import BaseModel, Field
-from starlette.requests import Request
-from starlette.responses import JSONResponse
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Initialize FastMCP server
 mcp = FastMCP("freshdesk-mcp")
 
+FRESHDESK_API_KEY = os.getenv("FRESHDESK_API_KEY")
+FRESHDESK_DOMAIN = os.getenv("FRESHDESK_DOMAIN")
 FRESHDESK_TICKETS_READ_ONLY = os.getenv("FRESHDESK_TICKETS_READ_ONLY", "false").lower() in ("true", "1", "yes")
-DEFAULT_STREAMABLE_HTTP_PATH = "/mcp"
-DEFAULT_SSE_PATH = "/sse"
-ALLOWED_TRANSPORTS = {"auto", "stdio", "streamable-http", "sse"}
-DOMAIN_PATTERN = re.compile(r"^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
-RAILWAY_ENV_KEYS = ("RAILWAY_ENVIRONMENT", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID")
-
-
-@dataclass(frozen=True)
-class FreshdeskConfig:
-    domain: str
-    api_key: str
-
-
-@dataclass(frozen=True)
-class RuntimeConfig:
-    transport: Literal["stdio", "streamable-http", "sse"]
-    host: str
-    port: int
-    path: str
-
-
-class FreshdeskConfigError(Exception):
-    def __init__(self, payload: Dict[str, Any]):
-        super().__init__(payload.get("error", "Freshdesk configuration error"))
-        self.payload = payload
-
-
-class FreshdeskValueProxy:
-    def __init__(self, field_name: str):
-        self.field_name = field_name
-
-    def __str__(self) -> str:
-        config = resolve_freshdesk_config()
-        return getattr(config, self.field_name)
-
-    def __repr__(self) -> str:
-        return f"FreshdeskValueProxy(field_name={self.field_name!r})"
-
-
-def _get_request_from_context(ctx: Optional[Context] = None) -> Optional[Request]:
-    try:
-        context = ctx or mcp.get_context()
-        return context.request_context.request
-    except (LookupError, ValueError):
-        return None
-
-
-def _mask_domain(domain: Optional[str]) -> str:
-    if not domain:
-        return "missing"
-    parts = domain.split(".")
-    if len(parts) < 2:
-        return "invalid"
-    return f"{parts[0][:2]}***.{'.'.join(parts[1:])}"
-
-
-def _normalize_domain(raw_domain: str) -> str:
-    domain = raw_domain.strip()
-    domain = re.sub(r"^https?://", "", domain, flags=re.IGNORECASE)
-    domain = domain.rstrip("/")
-
-    if "/" in domain or not DOMAIN_PATTERN.fullmatch(domain):
-        raise FreshdeskConfigError(
-            {
-                "error": "Invalid Freshdesk domain. Expected a hostname like yourcompany.freshdesk.com",
-                "domain_status": _mask_domain(domain),
-            }
-        )
-
-    return domain
-
-
-def resolve_freshdesk_config(ctx: Optional[Context] = None) -> FreshdeskConfig:
-    request = _get_request_from_context(ctx)
-    query_params = request.query_params if request is not None else {}
-
-    raw_domain = query_params.get("freshdeskDomain") or os.getenv("FRESHDESK_DOMAIN")
-    raw_api_key = query_params.get("freshdeskApiKey") or os.getenv("FRESHDESK_API_KEY")
-
-    if not raw_domain:
-        raise FreshdeskConfigError(
-            {
-                "error": "Missing Freshdesk domain. Provide freshdeskDomain in the connector URL or set FRESHDESK_DOMAIN",
-                "domain_status": "missing",
-            }
-        )
-
-    if not raw_api_key:
-        raise FreshdeskConfigError(
-            {
-                "error": "Missing Freshdesk API key. Provide freshdeskApiKey in the connector URL or set FRESHDESK_API_KEY",
-                "api_key_status": "missing",
-                "domain_status": _mask_domain(raw_domain),
-            }
-        )
-
-    return FreshdeskConfig(domain=_normalize_domain(raw_domain), api_key=raw_api_key.strip())
-
-
-def build_freshdesk_base_url(config: Optional[FreshdeskConfig] = None) -> str:
-    config = config or resolve_freshdesk_config()
-    return f"https://{config.domain}/api/v2"
-
-
-def build_freshdesk_url(path: str, config: Optional[FreshdeskConfig] = None) -> str:
-    normalized_path = path if path.startswith("/") else f"/{path}"
-    return f"{build_freshdesk_base_url(config)}{normalized_path}"
-
-
-def build_freshdesk_headers(
-    config: Optional[FreshdeskConfig] = None,
-    *,
-    content_type: Optional[str] = None,
-) -> Dict[str, str]:
-    config = config or resolve_freshdesk_config()
-    headers = {
-        "Authorization": f"Basic {base64.b64encode(f'{config.api_key}:X'.encode()).decode()}",
-    }
-    if content_type:
-        headers["Content-Type"] = content_type
-    return headers
-
-
-def _is_railway_environment() -> bool:
-    return any(os.getenv(key) for key in RAILWAY_ENV_KEYS)
-
-
-def _normalize_http_path(path: str) -> str:
-    normalized = path.strip() or DEFAULT_STREAMABLE_HTTP_PATH
-    return normalized if normalized.startswith("/") else f"/{normalized}"
-
-
-def resolve_runtime_config() -> RuntimeConfig:
-    requested_transport = os.getenv("MCP_TRANSPORT", "auto").strip().lower()
-    if requested_transport not in ALLOWED_TRANSPORTS:
-        raise ValueError(
-            f"Invalid MCP_TRANSPORT '{requested_transport}'. Expected one of: {', '.join(sorted(ALLOWED_TRANSPORTS))}"
-        )
-
-    if requested_transport == "auto":
-        transport: Literal["stdio", "streamable-http", "sse"] = (
-            "streamable-http" if os.getenv("PORT") or _is_railway_environment() else "stdio"
-        )
-    else:
-        transport = requested_transport  # type: ignore[assignment]
-
-    host = os.getenv("MCP_HOST", "0.0.0.0" if transport != "stdio" else "127.0.0.1")
-    port = int(os.getenv("PORT", os.getenv("MCP_PORT", "8000")))
-    default_path = DEFAULT_SSE_PATH if transport == "sse" else DEFAULT_STREAMABLE_HTTP_PATH
-    path = _normalize_http_path(os.getenv("MCP_PATH", default_path))
-
-    return RuntimeConfig(transport=transport, host=host, port=port, path=path)
-
-
-def configure_runtime(server: FastMCP) -> RuntimeConfig:
-    runtime = resolve_runtime_config()
-    server.settings.host = runtime.host
-    server.settings.port = runtime.port
-    if runtime.transport == "streamable-http":
-        server.settings.streamable_http_path = runtime.path
-    elif runtime.transport == "sse":
-        server.settings.sse_path = runtime.path
-    return runtime
-
-
-def run_runtime(server: FastMCP, runtime: RuntimeConfig) -> None:
-    if runtime.transport == "stdio":
-        server.run(transport="stdio")
-        return
-
-    import uvicorn
-
-    app = server.streamable_http_app() if runtime.transport == "streamable-http" else server.sse_app()
-    config = uvicorn.Config(
-        app,
-        host=runtime.host,
-        port=runtime.port,
-        log_level=server.settings.log_level.lower(),
-        access_log=False,
-    )
-    uvicorn.Server(config).run()
-
-
-RAW_MCP_TOOL = mcp.tool
-
-
-def freshdesk_tool(*tool_args: Any, **tool_kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        if inspect.iscoroutinefunction(fn):
-            @wraps(fn)
-            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                try:
-                    return await fn(*args, **kwargs)
-                except FreshdeskConfigError as exc:
-                    return exc.payload
-
-            return RAW_MCP_TOOL(*tool_args, **tool_kwargs)(async_wrapper)
-
-        @wraps(fn)
-        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            try:
-                return fn(*args, **kwargs)
-            except FreshdeskConfigError as exc:
-                return exc.payload
-
-        return RAW_MCP_TOOL(*tool_args, **tool_kwargs)(sync_wrapper)
-
-    return decorator
-
-
-FRESHDESK_API_KEY = FreshdeskValueProxy("api_key")
-FRESHDESK_DOMAIN = FreshdeskValueProxy("domain")
-mcp.tool = freshdesk_tool  # type: ignore[method-assign]
-
-
-@mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
-async def healthcheck(_: Request):
-    runtime = resolve_runtime_config()
-    return JSONResponse(
-        {
-            "status": "ok",
-            "transport": runtime.transport,
-            "path": runtime.path,
-        }
-    )
 
 
 def _check_tickets_read_only() -> Optional[Dict[str, Any]]:
@@ -555,16 +326,14 @@ async def update_ticket(ticket_id: int, ticket_fields: Dict[str, Any]) -> Dict[s
         "Content-Type": "application/json"
     }
 
-    # Work on a copy so callers do not observe side effects.
-    custom_fields = ticket_fields.get('custom_fields', {})
+    # Separate custom fields from standard fields
+    custom_fields = ticket_fields.pop('custom_fields', {})
 
     # Prepare the update data
     update_data = {}
 
     # Add standard fields if they are provided
     for field, value in ticket_fields.items():
-        if field == "custom_fields":
-            continue
         update_data[field] = value
 
     # Add custom fields if they exist
@@ -601,7 +370,7 @@ async def update_ticket(ticket_id: int, ticket_fields: Dict[str, Any]) -> Dict[s
             }
 
 @mcp.tool()
-async def delete_ticket(ticket_id: int) -> Dict[str, Any]:
+async def delete_ticket(ticket_id: int) -> str:
     """Delete a ticket in Freshdesk."""
     if (ro := _check_tickets_read_only()):
         return ro
@@ -610,17 +379,8 @@ async def delete_ticket(ticket_id: int) -> Dict[str, Any]:
         "Authorization": f"Basic {base64.b64encode(f'{FRESHDESK_API_KEY}:X'.encode()).decode()}"
     }
     async with httpx.AsyncClient() as client:
-        try:
-            response = await client.delete(url, headers=headers)
-            if response.status_code == 204:
-                return {"success": True, "message": "Ticket deleted successfully"}
-
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            return {"error": f"Failed to delete ticket: {str(e)}"}
-        except Exception as e:
-            return {"error": f"An unexpected error occurred: {str(e)}"}
+        response = await client.delete(url, headers=headers)
+        return response.json()
 
 @mcp.tool()
 async def get_ticket(ticket_id: int):
@@ -702,26 +462,12 @@ async def update_ticket_conversation(conversation_id: int,body: str)-> Dict[str,
         "body": body
     }
     async with httpx.AsyncClient() as client:
-        try:
-            response = await client.put(url, headers=headers, json=data)
-            response.raise_for_status()
+        response = await client.put(url, headers=headers, json=data)
+        status_code = response.status_code
+        if status_code == 200:
             return response.json()
-        except httpx.HTTPStatusError as e:
-            details = None
-            try:
-                details = e.response.json() if e.response else None
-            except Exception:
-                details = None
-            return {
-                "success": False,
-                "error": f"Failed to update conversation: {str(e)}",
-                "details": details
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"An unexpected error occurred: {str(e)}"
-            }
+        else:
+            return f"Cannot update conversation ${response.json()}"
 
 @mcp.tool()
 async def get_agents(page: Optional[int] = 1, per_page: Optional[int] = 30)-> list[Dict[str, Any]]:
@@ -1276,8 +1022,8 @@ async def get_field_properties(field_name: str):
 
     return matched_field
 
-@mcp.prompt(name="create_ticket")
-def create_ticket_prompt(
+@mcp.prompt()
+def create_ticket(
     subject: str,
     description: str,
     source: str,
@@ -1307,8 +1053,8 @@ Notes:
 Make sure to reference the correct keys from `get_field_properties()` when constructing the payload.
 """
 
-@mcp.prompt(name="create_reply")
-def create_reply_prompt(
+@mcp.prompt()
+def create_reply(
     ticket_id:int,
     reply_message: str,
 ) -> str:
@@ -1522,15 +1268,8 @@ async def delete_ticket_summary(ticket_id: int) -> Dict[str, Any]:
             return {"error": f"An unexpected error occurred: {str(e)}"}
 
 def main():
-    runtime = configure_runtime(mcp)
-    logger.info(
-        "Starting Freshdesk MCP server transport=%s host=%s port=%s path=%s",
-        runtime.transport,
-        runtime.host if runtime.transport != "stdio" else "n/a",
-        runtime.port if runtime.transport != "stdio" else "n/a",
-        runtime.path if runtime.transport != "stdio" else "n/a",
-    )
-    run_runtime(mcp, runtime)
+    logging.info("Starting Freshdesk MCP server")
+    mcp.run(transport='stdio')
 
 if __name__ == "__main__":
     main()
