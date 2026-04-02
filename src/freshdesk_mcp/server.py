@@ -425,7 +425,32 @@ async def get_ticket_conversation(ticket_id: int, ctx: Context) -> list[Dict[str
     if isinstance(cfg_r, dict):
         return cfg_r
     cfg: FreshdeskConfig = cfg_r
-    return await _fd_call(cfg, "GET", f"/api/v2/tickets/{ticket_id}/conversations")
+
+    all_conversations: list[Dict[str, Any]] = []
+    per_page = 100
+    page = 1
+    path = f"/api/v2/tickets/{ticket_id}/conversations"
+
+    async with httpx.AsyncClient(timeout=FD_HTTP_TIMEOUT) as client:
+        while True:
+            params = {"page": page, "per_page": per_page}
+            data, hdrs = await freshdesk_exchange(client, cfg, "GET", path, params=params)
+
+            if isinstance(data, dict) and data.get("error"):
+                return data
+
+            if not isinstance(data, list) or len(data) == 0:
+                break
+
+            all_conversations.extend(data)
+
+            link_info = parse_link_header(hdrs.get("Link", ""))
+            if link_info.get("next") is None or len(data) < per_page:
+                break
+
+            page += 1
+
+    return all_conversations
 
 
 @mcp.tool(annotations=_ANN_WRITE)
