@@ -1,9 +1,12 @@
+import base64
 import httpx
 import logging
+import mimetypes
 import os
 import re
 from enum import Enum, IntEnum
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import urlparse
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -55,6 +58,10 @@ _ANN_READ = ToolAnnotations(
 )
 _ANN_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True)
 _ANN_DELETE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True)
+
+MAX_ATTACHMENT_SIZE_BYTES = 20 * 1024 * 1024
+INLINE_IMAGE_HOST = "attachment.freshdesk.com"
+INLINE_IMAGE_SRC_RE = re.compile(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', re.IGNORECASE)
 
 
 def _require_freshdesk_config(ctx: Context) -> FreshdeskConfig | Dict[str, Any]:
@@ -124,6 +131,161 @@ def parse_link_header(link_header: str) -> Dict[str, Optional[int]]:
                 pagination[rel] = page_num
 
     return pagination
+
+
+def _extract_inline_image_urls(html: Optional[str]) -> List[str]:
+    if not html:
+        return []
+
+    urls: List[str] = []
+    for src in INLINE_IMAGE_SRC_RE.findall(html):
+        parsed = urlparse(src.strip())
+        if parsed.scheme not in ("http", "https"):
+            continue
+        netloc = parsed.netloc.lower()
+        if netloc == INLINE_IMAGE_HOST or netloc.endswith(f".{INLINE_IMAGE_HOST}"):
+            urls.append(src.strip())
+    return urls
+
+
+def _inline_image_name(index: int, content_type: Optional[str]) -> str:
+    normalized_type = (content_type or "").split(";", 1)[0].strip().lower()
+    extension = mimetypes.guess_extension(normalized_type) or ""
+    return f"inline_image_{index}{extension}"
+
+
+async def _get_all_ticket_conversations(
+    client: httpx.AsyncClient,
+    cfg: FreshdeskConfig,
+    ticket_id: int,
+) -> list[Dict[str, Any]] | Dict[str, Any]:
+    all_conversations: list[Dict[str, Any]] = []
+    per_page = 100
+    page = 1
+    path = f"/api/v2/tickets/{ticket_id}/conversations"
+
+    while True:
+        params = {"page": page, "per_page": per_page}
+        data, hdrs = await freshdesk_exchange(client, cfg, "GET", path, params=params)
+
+        if isinstance(data, dict) and data.get("error"):
+            return data
+
+        if not isinstance(data, list) or len(data) == 0:
+            break
+
+        all_conversations.extend(data)
+
+        link_info = parse_link_header(hdrs.get("Link", ""))
+        if link_info.get("next") is None:
+            break
+
+        page += 1
+
+    return all_conversations
+
+
+async def _download_attachment_content(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    source: str,
+    attachment_type: str,
+    name: Optional[str] = None,
+    content_type: Optional[str] = None,
+    size: Optional[int] = None,
+    inline_index: Optional[int] = None,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "source": source,
+        "type": attachment_type,
+    }
+
+    if name:
+        result["name"] = name
+    if content_type:
+        result["content_type"] = content_type
+    if size is not None:
+        result["size"] = size
+
+    if size is not None and size > MAX_ATTACHMENT_SIZE_BYTES:
+        result["error"] = (
+            f"Skipped attachment larger than 20MB limit ({size} bytes)"
+        )
+        return result
+
+    if not url:
+        result["error"] = "Missing attachment download URL"
+        if "name" not in result and attachment_type == "inline_image":
+            result["name"] = _inline_image_name(inline_index or 1, content_type)
+        return result
+
+    try:
+        async with client.stream("GET", url, follow_redirects=True) as response:
+            response.raise_for_status()
+
+            response_content_type = response.headers.get("Content-Type")
+            normalized_content_type = (
+                response_content_type.split(";", 1)[0].strip()
+                if response_content_type
+                else (content_type or "application/octet-stream")
+            )
+            result["content_type"] = normalized_content_type
+
+            content_length = response.headers.get("Content-Length")
+            if content_length:
+                try:
+                    content_length_int = int(content_length)
+                except ValueError:
+                    content_length_int = None
+                if content_length_int is not None:
+                    if size is None:
+                        result["size"] = content_length_int
+                    if content_length_int > MAX_ATTACHMENT_SIZE_BYTES:
+                        result["error"] = (
+                            f"Skipped attachment larger than 20MB limit ({content_length_int} bytes)"
+                        )
+                        if "name" not in result:
+                            result["name"] = _inline_image_name(inline_index or 1, normalized_content_type)
+                        return result
+
+            chunks: List[bytes] = []
+            total_size = 0
+            async for chunk in response.aiter_bytes():
+                if not chunk:
+                    continue
+                total_size += len(chunk)
+                if total_size > MAX_ATTACHMENT_SIZE_BYTES:
+                    result["size"] = total_size
+                    result["error"] = (
+                        f"Skipped attachment larger than 20MB limit ({total_size} bytes)"
+                    )
+                    if "name" not in result:
+                        result["name"] = _inline_image_name(inline_index or 1, normalized_content_type)
+                    return result
+                chunks.append(chunk)
+
+        final_bytes = b"".join(chunks)
+        result["size"] = len(final_bytes)
+        if "name" not in result:
+            result["name"] = _inline_image_name(inline_index or 1, result.get("content_type"))
+        result["data_base64"] = base64.b64encode(final_bytes).decode("ascii")
+        return result
+    except httpx.HTTPStatusError as exc:
+        result["error"] = f"Download failed with HTTP {exc.response.status_code}"
+        if "name" not in result and attachment_type == "inline_image":
+            result["name"] = _inline_image_name(inline_index or 1, content_type)
+        return result
+    except httpx.TimeoutException as exc:
+        result["error"] = f"Download timeout: {exc}"
+        if "name" not in result and attachment_type == "inline_image":
+            result["name"] = _inline_image_name(inline_index or 1, content_type)
+        return result
+    except httpx.RequestError as exc:
+        result["error"] = f"Download network error: {exc}"
+        if "name" not in result and attachment_type == "inline_image":
+            result["name"] = _inline_image_name(inline_index or 1, content_type)
+        return result
 
 # enums of ticket properties
 class TicketSource(IntEnum):
@@ -409,6 +571,63 @@ async def get_ticket(ticket_id: int, ctx: Context):
 
 
 @mcp.tool(annotations=_ANN_READ)
+async def get_ticket_attachments(ticket_id: int, ctx: Context) -> Dict[str, Any]:
+    """Get all file attachments and inline images for a Freshdesk ticket and its conversations."""
+    cfg_r = _require_freshdesk_config(ctx)
+    if isinstance(cfg_r, dict):
+        return cfg_r
+    cfg: FreshdeskConfig = cfg_r
+
+    attachments: List[Dict[str, Any]] = []
+    file_count = 0
+    inline_image_count = 0
+    inline_index = 1
+
+    async with httpx.AsyncClient(timeout=FD_HTTP_TIMEOUT) as client:
+        ticket = await freshdesk_call(client, cfg, "GET", f"/api/v2/tickets/{ticket_id}")
+        if isinstance(ticket, dict) and ticket.get("error"):
+            return ticket
+
+        conversations = await _get_all_ticket_conversations(client, cfg, ticket_id)
+        if isinstance(conversations, dict) and conversations.get("error"):
+            return conversations
+
+        sources: List[tuple[str, Dict[str, Any], str]] = [("ticket", ticket, "description")]
+        sources.extend(("conversation", conversation, "body") for conversation in conversations)
+
+        for source_name, payload, html_field in sources:
+            for attachment in payload.get("attachments") or []:
+                file_count += 1
+                attachment_result = await _download_attachment_content(
+                    client,
+                    attachment.get("attachment_url", ""),
+                    source=source_name,
+                    attachment_type="file",
+                    name=attachment.get("name"),
+                    content_type=attachment.get("content_type"),
+                    size=attachment.get("size"),
+                )
+                attachments.append(attachment_result)
+
+            for image_url in _extract_inline_image_urls(payload.get(html_field)):
+                inline_image_count += 1
+                image_result = await _download_attachment_content(
+                    client,
+                    image_url,
+                    source=source_name,
+                    attachment_type="inline_image",
+                    inline_index=inline_index,
+                )
+                attachments.append(image_result)
+                inline_index += 1
+
+    return {
+        "attachments": attachments,
+        "summary": f"Trovati {file_count} allegati file e {inline_image_count} immagini inline",
+    }
+
+
+@mcp.tool(annotations=_ANN_READ)
 async def search_tickets(query: str, ctx: Context) -> Dict[str, Any]:
     """Search for tickets in Freshdesk."""
     cfg_r = _require_freshdesk_config(ctx)
@@ -426,31 +645,8 @@ async def get_ticket_conversation(ticket_id: int, ctx: Context) -> list[Dict[str
         return cfg_r
     cfg: FreshdeskConfig = cfg_r
 
-    all_conversations: list[Dict[str, Any]] = []
-    per_page = 100
-    page = 1
-    path = f"/api/v2/tickets/{ticket_id}/conversations"
-
     async with httpx.AsyncClient(timeout=FD_HTTP_TIMEOUT) as client:
-        while True:
-            params = {"page": page, "per_page": per_page}
-            data, hdrs = await freshdesk_exchange(client, cfg, "GET", path, params=params)
-
-            if isinstance(data, dict) and data.get("error"):
-                return data
-
-            if not isinstance(data, list) or len(data) == 0:
-                break
-
-            all_conversations.extend(data)
-
-            link_info = parse_link_header(hdrs.get("Link", ""))
-            if link_info.get("next") is None or len(data) < per_page:
-                break
-
-            page += 1
-
-    return all_conversations
+        return await _get_all_ticket_conversations(client, cfg, ticket_id)
 
 
 @mcp.tool(annotations=_ANN_WRITE)
